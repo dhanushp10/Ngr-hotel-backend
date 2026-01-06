@@ -116,6 +116,7 @@ export default function KitchenStock() {
                                         type="number"
                                         size="small"
                                         value={row.received}
+                                        onWheel={(e) => e.target.blur()}
                                         onChange={(e) => handleChange(index, 'received', e.target.value)}
                                         sx={{ width: '80px' }}
                                     />
@@ -129,6 +130,7 @@ export default function KitchenStock() {
                                         type="number"
                                         size="small"
                                         value={row.consumption}
+                                        onWheel={(e) => e.target.blur()}
                                         onChange={(e) => handleChange(index, 'consumption', e.target.value)}
                                         sx={{ width: '80px' }}
                                     />
@@ -140,6 +142,7 @@ export default function KitchenStock() {
                                         type="number"
                                         size="small"
                                         value={row.wastage}
+                                        onWheel={(e) => e.target.blur()}
                                         onChange={(e) => handleChange(index, 'wastage', e.target.value)}
                                         sx={{ width: '80px' }}
                                     />

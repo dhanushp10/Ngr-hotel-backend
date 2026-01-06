@@ -12,7 +12,7 @@ import ExcelUploader from "../../components/ExcelUploader";
 export default function QuickEntry() {
   const [branches, setBranches] = useState([]);
   const [branch, setBranch] = useState("");
-  const [session, setSession] = useState("Lunch");
+  const [session, setSession] = useState("");
 
   const [codeNo, setCodeNo] = useState("");
   const [itemName, setItemName] = useState("");

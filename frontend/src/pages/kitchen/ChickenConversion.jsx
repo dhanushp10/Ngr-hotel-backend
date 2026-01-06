@@ -156,7 +156,7 @@ export default function ChickenConversion() {
       if (found) {
         const id = found.code || found.name;
         const kg = row["KG"] || row["KGS"] || row["kg"] || 0;
-        const plates = row["Plates"] || row["plates"] || 0;
+        const plates = row["Plate"] || row["plates"] || 0;
 
         map[id] = {
           ...map[id],

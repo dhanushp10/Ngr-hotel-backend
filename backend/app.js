@@ -2,6 +2,7 @@
 // IMPORTS & CONFIG
 // ======================================================
 const express = require("express");
+require("dotenv").config();
 const cors = require("cors");
 const pool = require("./db");
 

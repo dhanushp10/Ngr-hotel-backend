@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from "react";
 import {
   Paper, Typography, Grid, TextField, MenuItem, Button,
-  Table, TableHead, TableRow, TableCell, TableBody
+  Table, TableHead, TableRow, TableCell, TableBody,
+  CircularProgress, Box
 } from "@mui/material";
 import API from "../../api/axios";
 import ExcelUploader from "../../components/ExcelUploader";
@@ -15,6 +16,9 @@ export default function SendSaleReport() {
   const [date, setDate] = useState("");
 
   const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(false);
+
+  const round2 = (num) => Math.round((Number(num) || 0) * 100) / 100;
 
   // ---------------------------------------------------
   // LOAD BRANCHES + DISHES
@@ -53,89 +57,76 @@ export default function SendSaleReport() {
   // ---------------------------------------------------
   // AUTO-FILL RECEIVED QTY
   // ---------------------------------------------------
+  // ---------------------------------------------------
+  // OPTIMIZED AUTO-FILL: Received + OB
+  // ---------------------------------------------------
   useEffect(() => {
     if (!branch || !date || !session || rows.length === 0) return;
 
-    API.get("/hotel/received-items", {
-      params: { branch_id: branch, date, session }
-    })
-      .then((res) => {
+    setLoading(true);
+
+    Promise.all([
+      API.get("/hotel/received-items", { params: { branch_id: branch, date, session } }),
+      API.get("/hotel/opening-balance", { params: { branch_id: branch, date, session } })
+    ])
+      .then(([resReceieved, resOB]) => {
+        // 1. Map Received
         const receivedMap = {};
-        res.data.forEach(item => {
+        resReceieved.data.forEach(item => {
           receivedMap[String(item.code_no)] = Number(item.qty);
         });
 
-        const newRows = rows.map(row => {
-          const qty = receivedMap[String(row.code_no)] || 0;
-
-          // Re-calculate derived values
-          const received = qty;
-          const total = received; // Assuming OB is - or 0 for now
-
-          const con = Number(row.con || 0);
-          const others = Number(row.others || 0);
-          const com = Number(row.com || 0);
-          const total2 = con + others + com;
-          const cb = total - total2;
-
-          return {
-            ...row,
-            received: qty > 0 ? qty : "", // Only fill if > 0
-            total: total,
-            cb: cb
-          };
-        });
-
-        setRows(newRows);
-      })
-      .catch(console.error);
-  }, [branch, date, session]); // Run when these change
-
-  // ---------------------------------------------------
-  // AUTO-FILL OPENING BALANCE (OB)
-  // ---------------------------------------------------
-  useEffect(() => {
-    if (!branch || !date || !session || rows.length === 0) return;
-
-    API.get("/hotel/opening-balance", {
-      params: { branch_id: branch, date, session }
-    })
-      .then((res) => {
-        // Map codes to OB
+        // 2. Map OB
         const obMap = {};
-        res.data.forEach(item => {
+        resOB.data.forEach(item => {
           obMap[String(item.code_no)] = Number(item.ob);
         });
 
-        // Update Rows
+        // 3. Update Rows ONCE
         setRows(prevRows => prevRows.map(row => {
-          const fetchedOB = obMap[String(row.code_no)];
+          const code = String(row.code_no);
 
-          // Only update if found. If not found, default is "-" or 0.
-          if (fetchedOB === undefined) return row; // Don't change if no history
+          // Get values or keeping existing default
+          const qty = receivedMap[code] || 0;
+          const fetchedOB = obMap[code];
 
-          const ob = fetchedOB;
-          const received = Number(row.received || 0);
+          // OB Logic: if undefined, keep current (which might be "-" or user edit). 
+          // But here we are reloading context, so maybe we SHOULD update if found?
+          // The previous logic only updated if found.
+          const currentOB = row.ob; // "row.ob" might be "-"
+          const finalOB = fetchedOB !== undefined ? fetchedOB : currentOB;
 
-          const total = ob + received;
+          // Received Logic: Only fill if > 0
+          // If strictly 0 from DB, do we override? Previous code: qty > 0 ? qty : ""
+          // Let's stick to previous behavior.
+          const finalReceived = qty > 0 ? qty : "";
+
+          // CALCULATIONS
+          // Treat "-" as 0
+          const numOB = finalOB === "-" ? 0 : Number(finalOB);
+          const numRec = Number(finalReceived || 0);
+          const total = round2(numOB + numRec);
 
           const con = Number(row.con || 0);
           const others = Number(row.others || 0);
           const com = Number(row.com || 0);
-          const total2 = con + others + com;
+          const total2 = round2(con + others + com);
 
-          const cb = total - total2;
+          const cb = round2(total - total2);
 
           return {
             ...row,
-            ob: ob,
-            total: total,
-            cb: cb
+            ob: finalOB, // OB is usually fixed/string from db or "-"
+            received: finalReceived,
+            total,
+            cb
           };
         }));
       })
-      .catch(console.error);
-  }, [branch, date, session]);
+      .catch(console.error)
+      .finally(() => setLoading(false));
+
+  }, [branch, date, session]); // Dependencies: only when these change (rows excluded to avoid loops, though ideally safe)
 
 
   // ---------------------------------------------------
@@ -147,76 +138,98 @@ export default function SendSaleReport() {
 
     // Left TOTAL
     const received = Number(copy[index].received || 0);
-    copy[index].total = received;
+    copy[index].total = round2((Number(copy[index].ob) || 0) + received);
 
     // Right total2
     const con = Number(copy[index].con || 0);
     const others = Number(copy[index].others || 0);
     const com = Number(copy[index].com || 0);
-    copy[index].total2 = con + others + com;
+    copy[index].total2 = round2(con + others + com);
 
     // Closing balance
-    copy[index].cb = copy[index].total - copy[index].total2;
+    copy[index].cb = round2(copy[index].total - copy[index].total2);
 
 
     setRows(copy);
   };
 
   const handleExcelUpload = (uploadedData) => {
-    // Map code_no -> row data
-    const uploadMap = {};
-    uploadedData.forEach(row => {
-      // Allow flexible column names
-      const code = row["Code"] || row["CodeNo"] || row["code_no"];
-      if (code) {
-        uploadMap[String(code).toLowerCase()] = row;
-      }
-    });
-
     const newRows = rows.map(row => {
-      const match = uploadMap[String(row.code_no).toLowerCase()];
+      // 1. Find the matching row in Excel data
+      // Strategy: Look for a row where code columns match the current code_no (case-insensitive)
+      const targetCode = String(row.code_no).trim().toLowerCase();
+
+      const match = uploadedData.find(excelRow => {
+        // Check commonly used Code headers
+        // We normalize Excel keys to lower case for check
+        const excelKeys = Object.keys(excelRow);
+
+        // Find key that looks like "code"
+        const codeKey = excelKeys.find(k => ["code", "code no", "codeno"].includes(k.toLowerCase().trim()));
+
+        if (!codeKey) return false;
+
+        const excelValue = String(excelRow[codeKey]).trim().toLowerCase();
+        return excelValue === targetCode;
+      });
+
       if (!match) return row;
 
-      // Extract fields if present
-      const getVal = (keys) => {
-        for (let k of keys) {
-          if (match[k] !== undefined) return Number(match[k]);
+      // 2. Helper to get value case-insensitively
+      // keyList: array of lower-case keys we expect (e.g. ['received', 'rcv'])
+      const getValue = (keyList) => {
+        const excelKeys = Object.keys(match);
+        // Find which key in Excel matches one of our candidates
+        const foundKey = excelKeys.find(k => keyList.includes(k.toLowerCase().trim()));
+
+        if (foundKey && match[foundKey] !== undefined) {
+          return Number(match[foundKey]);
         }
         return undefined;
       };
 
-      const received = getVal(["RECEIVED", "received", "RCV"]) ?? row.received;
-      const con = getVal(["CON", "con", "Consumption"]) ?? row.con;
-      const others = getVal(["OTHERS", "others"]) ?? row.others;
-      const com = getVal(["COM", "com"]) ?? row.com;
-      const s_exes = getVal(["S&EXES", "s_exes", "Short/Excess"]) ?? row.s_exes;
+      // Helper for string fields
+      const getString = (keyList) => {
+        const excelKeys = Object.keys(match);
+        const foundKey = excelKeys.find(k => keyList.includes(k.toLowerCase().trim()));
+        if (foundKey && match[foundKey] !== undefined) {
+          return String(match[foundKey]);
+        }
+        return undefined;
+      };
 
-      const remarks = match["REMARKS"] || match["remarks"] || row.remarks;
-      const report = match["REPORT"] || match["report"] || row.report;
+      // 3. Extract Values
+      const received = getValue(["received", "rcv"]) ?? row.received;
+      const con = getValue(["con", "consumption"]) ?? row.con;
+      const others = getValue(["others", "other"]) ?? row.others;
+      const com = getValue(["com", "company", "complimentary"]) ?? row.com;
+      const s_exes = getValue(["s&exes", "s_exes", "short/excess", "short", "excess"]) ?? row.s_exes;
 
-      // Recalculate totals
-      const ob = Number(row.ob) || 0; // ob is string "-" or number
+      const remarks = getString(["remarks", "remark"]) || row.remarks;
+      const report = getString(["report"]) || row.report;
 
-      // Treat "-" as 0 for calc
-      const numOB = row.ob === "-" ? 0 : Number(row.ob);
+      // 4. Recalculate
+      const ob = row.ob; // keep existing OB logic
+      const numOB = ob === "-" ? 0 : Number(ob);
 
+      // New values or existing
       const numRec = Number(received || 0);
-      const total = numOB + numRec;
+      const total = round2(numOB + numRec);
 
       const numCon = Number(con || 0);
       const numOthers = Number(others || 0);
       const numCom = Number(com || 0);
-      const total2 = numCon + numOthers + numCom;
+      const total2 = round2(numCon + numOthers + numCom);
 
-      const cb = total - total2;
+      const cb = round2(total - total2);
 
       return {
         ...row,
-        received: received !== undefined ? received : row.received,
-        con: con !== undefined ? con : row.con,
-        others: others !== undefined ? others : row.others,
-        com: com !== undefined ? com : row.com,
-        s_exes: s_exes !== undefined ? s_exes : row.s_exes,
+        received: received !== undefined ? round2(received) : row.received,
+        con: con !== undefined ? round2(con) : row.con,
+        others: others !== undefined ? round2(others) : row.others,
+        com: com !== undefined ? round2(com) : row.com,
+        s_exes: s_exes !== undefined ? round2(s_exes) : row.s_exes,
         remarks: remarks !== undefined ? remarks : row.remarks,
         report: report !== undefined ? report : row.report,
         total,
@@ -308,8 +321,18 @@ export default function SendSaleReport() {
 
 
 
-      <Grid container sx={{ mb: 2 }}>
-        <ExcelUploader onDataLoaded={handleExcelUpload} label="Upload Report Data" />
+      <Grid container sx={{ mb: 2, alignItems: 'center' }}>
+        <Grid item>
+          <ExcelUploader onDataLoaded={handleExcelUpload} label="Upload Report Data" />
+        </Grid>
+        {loading && (
+          <Grid item sx={{ ml: 2 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <CircularProgress size={24} />
+              <Typography variant="body2" color="text.secondary">Loading data...</Typography>
+            </Box>
+          </Grid>
+        )}
       </Grid>
 
       {/* TABLE */}
